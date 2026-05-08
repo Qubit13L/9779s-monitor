@@ -30,7 +30,7 @@ jobs:
 
       - name: Run monitor
         env:
-          TWITTER_USERNAME: ${{ vars.TWITTER_USERNAME }}
+          TWITTER_USERNAMES: ${{ vars.TWITTER_USERNAMES }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}

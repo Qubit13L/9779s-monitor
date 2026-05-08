@@ -29,12 +29,29 @@ NITTER_INSTANCES = [
     "https://nitter.poast.org",
 ]
 
-USERNAME = os.environ["TWITTER_USERNAME"]
+def _parse_usernames() -> list[str]:
+    raw = os.environ.get("TWITTER_USERNAMES") or os.environ.get("TWITTER_USERNAME", "")
+    return [u.strip().lstrip("@") for u in raw.split(",") if u.strip()]
+
+
+USERNAMES = _parse_usernames()
 DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK_URL"]
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com")
 DISCORD_USER_ID = os.environ.get("DISCORD_USER_ID", "").strip()
+
+# Friendly display name + per-artist accent color for the embeds.
+# Falls back to the X handle if not in this map.
+ARTIST_DISPLAY = {
+    "janeeeyeh": {"name": "Jane", "color_offset": 0},
+    "kaosupassara9": {"name": "Kao", "color_offset": 1},
+}
+
+
+def display_for(username: str) -> str:
+    info = ARTIST_DISPLAY.get(username.lower())
+    return info["name"] if info else f"@{username}"
 
 
 @dataclass
@@ -50,6 +67,9 @@ class Tweet:
     images: list[str]
     videos: list[str]
     text: str
+    # Which monitored username produced this tweet (could be janeeyeh or Kaosupassara9).
+    # Distinct from `author`, which is the original poster for RTs.
+    monitored_user: str = ""
 
 
 def http_get(url: str, timeout: int = 20) -> bytes:
@@ -115,7 +135,7 @@ def nitter_pic_to_twimg(url: str) -> str:
     return url
 
 
-def parse_tweet(item: ET.Element) -> Tweet:
+def parse_tweet(item: ET.Element, monitored_user: str = "") -> Tweet:
     def _t(tag: str) -> str:
         el = item.find(tag)
         return (el.text or "") if el is not None else ""
@@ -157,6 +177,7 @@ def parse_tweet(item: ET.Element) -> Tweet:
         images=images,
         videos=videos,
         text=text,
+        monitored_user=monitored_user,
     )
 
 
@@ -316,15 +337,25 @@ def parse_sections(content: str) -> dict:
     }
 
 
+# Base palette: blue=original, purple=RT, green=quote, orange=reply.
+# Each artist gets a slightly different shade for visual separation.
+ARTIST_COLOR_PALETTES = [
+    {"original": 0x1DA1F2, "retweet": 0x9146FF, "quote": 0x00C875, "reply": 0xFF8C00},
+    {"original": 0xFF6B9D, "retweet": 0xC44569, "quote": 0xF8B500, "reply": 0xE17055},
+]
+
+
 def determine_type(tw: Tweet, analysis: dict) -> tuple[str, str, int]:
     """Returns (emoji, label, color)."""
+    info = ARTIST_DISPLAY.get(tw.monitored_user.lower(), {"color_offset": 0})
+    palette = ARTIST_COLOR_PALETTES[info["color_offset"] % len(ARTIST_COLOR_PALETTES)]
     if tw.is_retweet:
-        return ("🔁", "转发", 0x9146FF)
+        return ("🔁", "转发", palette["retweet"])
     if tw.is_reply:
-        return ("💬", "回复", 0xFF8C00)
+        return ("💬", "回复", palette["reply"])
     if analysis.get("is_quote"):
-        return ("🔗", "引用", 0x00C875)
-    return ("📌", "原创", 0x1DA1F2)
+        return ("🔗", "引用", palette["quote"])
+    return ("📌", "原创", palette["original"])
 
 
 def _pub_to_iso(rfc822: str) -> str:
@@ -336,16 +367,15 @@ def _pub_to_iso(rfc822: str) -> str:
 
 def build_embeds(tw: Tweet, analysis: dict) -> list[dict]:
     emoji, label, color = determine_type(tw, analysis)
+    monitored = tw.monitored_user
+    artist_name = display_for(monitored)
 
     if tw.is_retweet:
-        title = f"{emoji} {label} · 原作者 @{tw.author}"
-        author_for_footer = tw.author or USERNAME
-    elif tw.is_reply:
-        title = f"{emoji} {label} · @{USERNAME}"
-        author_for_footer = USERNAME
+        title = f"{emoji} {label} · {artist_name} 转了 @{tw.author}"
+        author_for_footer = tw.author or monitored
     else:
-        title = f"{emoji} {label} · @{USERNAME}"
-        author_for_footer = USERNAME
+        title = f"{emoji} {label} · {artist_name}"
+        author_for_footer = monitored
 
     is_chinese = analysis.get("is_chinese") if analysis else is_likely_chinese(tw.text)
     summary = analysis.get("summary", "") if analysis else ""
@@ -408,23 +438,37 @@ def push_discord(tw: Tweet, analysis: dict) -> bool:
 def main() -> int:
     bootstrap = os.environ.get("BOOTSTRAP", "").lower() in ("1", "true", "yes")
 
-    raw = fetch_rss(USERNAME)
-    items = ET.fromstring(raw).findall(".//item")
-    print(f"[parse] got {len(items)} items", flush=True)
+    if not USERNAMES:
+        print("[error] TWITTER_USERNAMES is empty", flush=True)
+        return 1
 
-    tweets = [parse_tweet(it) for it in items]
-    tweets = [t for t in tweets if t.guid]
-    tweets.sort(key=lambda t: t.pub_date)
+    print(f"[start] monitoring {len(USERNAMES)} accounts: {USERNAMES}", flush=True)
+
+    all_tweets: list[Tweet] = []
+    for user in USERNAMES:
+        try:
+            raw = fetch_rss(user)
+        except Exception as e:
+            print(f"[fetch] giving up on {user}: {e}", flush=True)
+            continue
+        items = ET.fromstring(raw).findall(".//item")
+        per_user = [parse_tweet(it, monitored_user=user) for it in items]
+        per_user = [t for t in per_user if t.guid]
+        print(f"[parse] @{user}: {len(per_user)} items", flush=True)
+        all_tweets.extend(per_user)
+        time.sleep(2)
+
+    all_tweets.sort(key=lambda t: t.pub_date)
 
     seen = load_state()
-    new_tweets = [t for t in tweets if t.guid not in seen]
-    print(f"[diff] {len(new_tweets)} new of {len(tweets)} total", flush=True)
+    new_tweets = [t for t in all_tweets if t.guid not in seen]
+    print(f"[diff] {len(new_tweets)} new of {len(all_tweets)} total", flush=True)
 
     if bootstrap or not seen:
-        for t in tweets:
+        for t in all_tweets:
             seen.add(t.guid)
         save_state(seen)
-        print(f"[bootstrap] marked {len(tweets)} as seen, no push", flush=True)
+        print(f"[bootstrap] marked {len(all_tweets)} as seen, no push", flush=True)
         return 0
 
     pushed = 0
