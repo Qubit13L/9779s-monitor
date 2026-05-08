@@ -237,6 +237,51 @@ def analyze_text(text: str) -> dict:
     return parse_sections(content)
 
 
+def translate_with_google(text: str) -> dict:
+    """Free Google Translate fallback (gtx endpoint, no API key required).
+
+    Used when DeepSeek fails. Returns the same dict shape as analyze_text
+    but is_quote/summary are best-effort (Google can't classify).
+    """
+    if not text.strip():
+        return {}
+    try:
+        url = (
+            "https://translate.googleapis.com/translate_a/single"
+            "?client=gtx&sl=auto&tl=zh-CN&dt=t&q="
+            + urllib.parse.quote(text[:4500])
+        )
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", "ignore"))
+    except Exception as e:
+        print(f"[google] error: {e}", flush=True)
+        return {}
+
+    if not isinstance(data, list) or not data or not isinstance(data[0], list):
+        return {}
+
+    chunks = [c[0] for c in data[0] if isinstance(c, list) and c and c[0]]
+    translation = "".join(chunks).strip()
+    detected_lang = data[2] if len(data) > 2 and isinstance(data[2], str) else ""
+    is_chinese = detected_lang.startswith("zh") or is_likely_chinese(text)
+
+    print(f"[google] fallback ok ({detected_lang} → zh-CN)", flush=True)
+    return {
+        "is_chinese": is_chinese,
+        "is_quote": False,
+        "summary": "",
+        "translation": "" if is_chinese else translation,
+        "source": "google",
+    }
+
+
 def parse_sections(content: str) -> dict:
     """Parse the section-marker format from analyze_text.
 
@@ -305,6 +350,7 @@ def build_embeds(tw: Tweet, analysis: dict) -> list[dict]:
     is_chinese = analysis.get("is_chinese") if analysis else is_likely_chinese(tw.text)
     summary = analysis.get("summary", "") if analysis else ""
     translation = analysis.get("translation", "") if analysis else ""
+    source = analysis.get("source", "deepseek") if analysis else "none"
 
     parts: list[str] = []
     if summary:
@@ -313,7 +359,8 @@ def build_embeds(tw: Tweet, analysis: dict) -> list[dict]:
     if is_chinese:
         parts.append(f"**📝 原文**\n{tw.text[:1500]}")
     elif translation:
-        parts.append(f"**📝 中文译文**\n{translation[:1500]}")
+        label_tag = "（机器翻译）" if source == "google" else ""
+        parts.append(f"**📝 中文译文{label_tag}**\n{translation[:1500]}")
     else:
         parts.append(f"**📝 原文**\n{tw.text[:1500]}")
 
@@ -382,7 +429,11 @@ def main() -> int:
 
     pushed = 0
     for t in new_tweets:
-        analysis = analyze_text(t.text) if t.text else {}
+        analysis: dict = {}
+        if t.text:
+            analysis = analyze_text(t.text)
+            if not analysis:
+                analysis = translate_with_google(t.text)
         ok = push_discord(t, analysis)
         if ok:
             seen.add(t.guid)
