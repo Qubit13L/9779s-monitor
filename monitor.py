@@ -34,6 +34,7 @@ DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK_URL"]
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com")
+DISCORD_USER_ID = os.environ.get("DISCORD_USER_ID", "").strip()
 
 
 @dataclass
@@ -78,7 +79,13 @@ def http_post_json(url: str, body: dict, headers: dict | None = None,
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", "ignore")
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", "ignore")
+        try:
+            body_text = e.read().decode("utf-8", "ignore")
+        except Exception:
+            body_text = ""
+        return e.code, body_text
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+        return 0, f"network_error: {e}"
 
 
 def fetch_rss(username: str) -> bytes:
@@ -216,7 +223,7 @@ def analyze_text(text: str) -> dict:
     status, resp_text = http_post_json(
         f"{DEEPSEEK_BASE}/chat/completions", body, headers, timeout=45
     )
-    if status >= 300:
+    if status == 0 or status >= 300:
         print(f"[analyze] HTTP {status}: {resp_text[:300]}", flush=True)
         return {}
 
@@ -231,15 +238,27 @@ def analyze_text(text: str) -> dict:
 
 
 def parse_sections(content: str) -> dict:
-    """Parse the section-marker format from analyze_text."""
-    sections: dict[str, str] = {}
-    pattern = re.compile(
-        r"===\s*(IS_CHINESE|IS_QUOTE|SUMMARY|TRANSLATION)\s*===\s*(.*?)"
-        r"(?=\n===|\Z)",
-        re.DOTALL | re.IGNORECASE,
+    """Parse the section-marker format from analyze_text.
+
+    Uses re.split on the marker pattern itself so adjacent or empty
+    sections can't bleed into each other.
+    """
+    parts = re.split(
+        r"===\s*(IS_CHINESE|IS_QUOTE|SUMMARY|TRANSLATION|END)\s*===",
+        content,
+        flags=re.IGNORECASE,
     )
-    for m in pattern.finditer(content):
-        sections[m.group(1).upper()] = m.group(2).strip()
+    if len(parts) <= 1:
+        print(f"[analyze] no markers found in: {content[:200]}", flush=True)
+        return {}
+
+    sections: dict[str, str] = {}
+    for i in range(1, len(parts) - 1, 2):
+        marker = parts[i].upper()
+        value = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        if marker == "END":
+            continue
+        sections[marker] = value
 
     def to_bool(s: str) -> bool:
         return s.strip().lower().startswith("true")
@@ -319,9 +338,18 @@ def build_embeds(tw: Tweet, analysis: dict) -> list[dict]:
 
 def push_discord(tw: Tweet, analysis: dict) -> bool:
     embeds = build_embeds(tw, analysis)
-    payload = {"embeds": embeds}
+    payload: dict = {"embeds": embeds}
+
+    content_parts: list[str] = []
+    if DISCORD_USER_ID:
+        content_parts.append(f"<@{DISCORD_USER_ID}>")
     if tw.videos:
-        payload["content"] = f"📹 含视频，建议直接看原推: {tw.link}"
+        content_parts.append(f"📹 含视频，建议直接看原推: {tw.link}")
+    if content_parts:
+        payload["content"] = " ".join(content_parts)
+
+    if DISCORD_USER_ID:
+        payload["allowed_mentions"] = {"parse": [], "users": [DISCORD_USER_ID]}
 
     status, body = http_post_json(DISCORD_WEBHOOK, payload)
     if status >= 300:

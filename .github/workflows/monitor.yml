@@ -33,6 +33,7 @@ jobs:
           TWITTER_USERNAME: ${{ vars.TWITTER_USERNAME }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           BOOTSTRAP: ${{ inputs.bootstrap }}
         run: python monitor.py
 
