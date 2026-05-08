@@ -69,7 +69,7 @@ def http_post_json(url: str, body: dict, headers: dict | None = None,
     data = json.dumps(body).encode("utf-8")
     base_headers = {
         "Content-Type": "application/json",
-        "User-Agent": "tw-monitor/1.0 (+https://github.com/Qubit13L)",
+        "User-Agent": "9779s-monitor/1.0 (+https://github.com/Qubit13L/9779s-monitor)",
     }
     if headers:
         base_headers.update(headers)
