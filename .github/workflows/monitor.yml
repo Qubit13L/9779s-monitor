@@ -1,0 +1,49 @@
+name: Monitor Twitter
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: "Mark all current tweets as seen without pushing (use on first run)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run monitor
+        env:
+          TWITTER_USERNAME: ${{ vars.TWITTER_USERNAME }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+        run: python monitor.py
+
+      - name: Commit state
+        run: |
+          if [[ -z "$(git status --porcelain state/)" ]]; then
+            echo "no state changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git commit -m "chore: update seen state [skip ci]"
+          git push
