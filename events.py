@@ -31,7 +31,10 @@ EVENTS_FILE = ROOT / "state" / "events.json"
 BKK = timezone(timedelta(hours=7))
 PEK = timezone(timedelta(hours=8))
 
-DEFAULT_START_TIME = "14:00"  # Bangkok time fallback when event has no specific time
+# start_time_bkk is intentionally optional. Events without a confirmed time
+# are stored date-only and skipped by the per-event reminder logic — they
+# still appear in monthly/weekly digests. Don't invent a placeholder time:
+# the user has to be able to trust any time we show.
 
 DISCORD_ITINERARY_WEBHOOK = os.environ.get("DISCORD_ITINERARY_WEBHOOK_URL", "").strip()
 DISCORD_USER_ID = os.environ.get("DISCORD_USER_ID", "").strip()
@@ -76,9 +79,16 @@ def event_id(username: str, start_date_bkk: str, title: str) -> str:
 
 # ---------- time helpers ----------
 
-def event_start_utc(ev: dict) -> datetime:
+def event_start_utc(ev: dict) -> datetime | None:
+    """Returns the event's UTC start datetime, or None if no time is known.
+
+    Events with no confirmed start_time_bkk are date-only and not eligible
+    for T-24h/T-2h reminders — caller must handle None.
+    """
+    time_str = ev.get("start_time_bkk")
+    if not time_str:
+        return None
     date_str = ev["start_date_bkk"]
-    time_str = ev.get("start_time_bkk") or DEFAULT_START_TIME
     naive = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
     return naive.replace(tzinfo=BKK).astimezone(timezone.utc)
 
@@ -202,8 +212,7 @@ def build_reminder_embed(ev: dict, kind: str) -> dict:
     username = ev["username"]
     name = _name(username)
     color = _color(username)
-    start_utc = event_start_utc(ev)
-    ts = int(start_utc.timestamp())
+    start_utc = event_start_utc(ev)  # guaranteed non-None — gated upstream
 
     emoji = _emoji(ev)
     title = ev["title"]
@@ -211,20 +220,14 @@ def build_reminder_embed(ev: dict, kind: str) -> dict:
 
     when_label = "明天" if kind == "24h" else "2 小时后"
 
-    parts = [
-        f"🕐 开始时间：<t:{ts}:f> · <t:{ts}:R>",
-        f"📍 日期范围（曼谷）：{date_range_label(ev)}",
-    ]
+    ts = int(start_utc.timestamp())
+    parts = [f"🕐 开始时间：<t:{ts}:f> · <t:{ts}:R>"]
     if zh and zh != title:
         parts.append(f"📌 活动：**{title}**\n{zh}")
     else:
         parts.append(f"📌 活动：**{title}**")
     if ev.get("notes"):
         parts.append(f"📝 备注：{ev['notes']}")
-
-    src = ev.get("source", {})
-    if src.get("url"):
-        parts.append(f"🔗 来源：{src['url']}")
 
     return {
         "title": f"⏰ {emoji} {name} · {when_label}",
@@ -305,6 +308,9 @@ def tick(now_unix: int | None = None) -> None:
         except Exception as e:
             print(f"[itinerary] bad event {ev.get('id')}: {e}", flush=True)
             continue
+
+        if start_utc is None:
+            continue  # date-only event, no T-24h/T-2h reminders
 
         if now >= start_utc:
             continue  # event already started

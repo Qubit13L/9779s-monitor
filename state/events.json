@@ -8,7 +8,7 @@
       "type": "confidential",
       "start_date_bkk": "2026-05-03",
       "end_date_bkk": "2026-05-03",
-      "start_time_bkk": "14:00",
+      "start_time_bkk": "",
       "raw_text": "3 SHOOTING CONFIDENTIAL",
       "notes": "",
       "source": {
@@ -29,7 +29,7 @@
       "type": "public",
       "start_date_bkk": "2026-05-07",
       "end_date_bkk": "2026-05-07",
-      "start_time_bkk": "14:00",
+      "start_time_bkk": "",
       "raw_text": "7 CUTE PRESS LIVE",
       "notes": "",
       "source": {
@@ -50,7 +50,7 @@
       "type": "confidential",
       "start_date_bkk": "2026-05-08",
       "end_date_bkk": "2026-05-08",
-      "start_time_bkk": "14:00",
+      "start_time_bkk": "",
       "raw_text": "8 SHOOTING CONFIDENTIAL",
       "notes": "",
       "source": {
@@ -71,7 +71,7 @@
       "type": "confidential",
       "start_date_bkk": "2026-05-10",
       "end_date_bkk": "2026-05-10",
-      "start_time_bkk": "14:00",
+      "start_time_bkk": "",
       "raw_text": "10 SHOOTING CONFIDENTIAL",
       "notes": "",
       "source": {
@@ -92,7 +92,7 @@
       "type": "confidential",
       "start_date_bkk": "2026-05-13",
       "end_date_bkk": "2026-05-15",
-      "start_time_bkk": "14:00",
+      "start_time_bkk": "",
       "raw_text": "13-15 SHOOTING CONFIDENTIAL",
       "notes": "三天连续拍摄",
       "source": {
@@ -113,9 +113,9 @@
       "type": "public",
       "start_date_bkk": "2026-05-17",
       "end_date_bkk": "2026-05-17",
-      "start_time_bkk": "18:00",
+      "start_time_bkk": "",
       "raw_text": "17 NATARAJA AWARDS 2026",
-      "notes": "颁奖典礼，预计晚间举行",
+      "notes": "",
       "source": {
         "platform": "instagram",
         "url": "https://www.instagram.com/p/DXgVi7KkzkO/",
@@ -134,7 +134,7 @@
       "type": "confidential",
       "start_date_bkk": "2026-05-18",
       "end_date_bkk": "2026-05-20",
-      "start_time_bkk": "14:00",
+      "start_time_bkk": "",
       "raw_text": "18-20 SHOOTING CONFIDENTIAL",
       "notes": "三天连续拍摄",
       "source": {
@@ -155,7 +155,7 @@
       "type": "confidential",
       "start_date_bkk": "2026-05-22",
       "end_date_bkk": "2026-05-26",
-      "start_time_bkk": "14:00",
+      "start_time_bkk": "",
       "raw_text": "22-26 CONFIDENTLE WORK (TBA)",
       "notes": "五天连续工作（原图拼写为 CONFIDENTLE）",
       "source": {
@@ -176,7 +176,7 @@
       "type": "public",
       "start_date_bkk": "2026-05-28",
       "end_date_bkk": "2026-05-30",
-      "start_time_bkk": "14:00",
+      "start_time_bkk": "",
       "raw_text": "28-30 BRAND EVENT (DETAILS TO BE ANNOUNCED)",
       "notes": "三天品牌活动，详情待公布",
       "source": {
