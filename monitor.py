@@ -582,6 +582,15 @@ def main() -> int:
 
     save_state(seen)
     print(f"[done] pushed {pushed}/{len(new_tweets)}", flush=True)
+
+    # Itinerary tick: fire any due event reminders + weekly digest if Mon 12:00 BJT.
+    # Isolated so a failure here can't break the tweet pipeline.
+    try:
+        import events as itinerary
+        itinerary.tick(now)
+    except Exception as e:
+        print(f"[itinerary] tick failed: {e}", flush=True)
+
     return 0
 
 
