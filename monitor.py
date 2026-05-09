@@ -40,6 +40,8 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com")
 DISCORD_USER_ID = os.environ.get("DISCORD_USER_ID", "").strip()
+X_AUTH_TOKEN = os.environ.get("X_AUTH_TOKEN", "").strip()
+X_CT0 = os.environ.get("X_CT0", "").strip()
 
 # Friendly display name + per-artist accent color for the embeds.
 # Falls back to the X handle if not in this map.
@@ -71,9 +73,14 @@ class Tweet:
     # Distinct from `author`, which is the original poster for RTs.
     monitored_user: str = ""
     # Unix timestamp of when *we* first saw this tweet in the feed.
-    # For retweets we use this (±10 min approximation) as the RT time,
-    # since nitter only exposes the original post's pubDate.
+    # Used as a ±10 min approximation when x_api isn't available and
+    # nitter only exposes the original post's pubDate (not RT time).
     detected_at: int = 0
+    # When sourced from x_api: pub_date IS the RT time (exact, from the X
+    # GraphQL API), and original_pub_date is the original post's time.
+    # When sourced from nitter: pub_date is the original post time and
+    # original_pub_date is empty.
+    original_pub_date: str = ""
 
 
 def http_get(url: str, timeout: int = 20) -> bytes:
@@ -402,20 +409,35 @@ def build_embeds(tw: Tweet, analysis: dict) -> list[dict]:
     # Discord <t:UNIX:f> renders in viewer's local timezone, <t:UNIX:R> shows relative.
     # For retweets we show TWO times: detected-at (≈ when she RT'd, ±10min) AND original pubDate.
     # For everything else there's only one time so we keep it simple.
+    pub_ts = 0
+    orig_ts = 0
     try:
-        orig_ts = int(parsedate_to_datetime(tw.pub_date).timestamp())
+        pub_ts = int(parsedate_to_datetime(tw.pub_date).timestamp())
     except Exception:
-        orig_ts = 0
+        pass
+    if tw.original_pub_date:
+        try:
+            orig_ts = int(parsedate_to_datetime(tw.original_pub_date).timestamp())
+        except Exception:
+            pass
 
-    if tw.is_retweet and tw.detected_at:
-        parts.append(
-            f"🔁 转推时间：<t:{tw.detected_at}:f> · <t:{tw.detected_at}:R>  "
-            f"`±10分钟近似`"
-        )
-        if orig_ts:
+    if tw.is_retweet:
+        # x_api path: pub_ts IS the precise RT time, orig_ts IS the original time
+        if orig_ts and pub_ts:
+            parts.append(f"🔁 转推时间：<t:{pub_ts}:f> · <t:{pub_ts}:R>")
             parts.append(f"📅 原推发布：<t:{orig_ts}:f>")
-    elif orig_ts:
-        parts.append(f"🕐 发布时间：<t:{orig_ts}:f> · <t:{orig_ts}:R>")
+        # nitter path: pub_ts is the original post time; use detected_at as RT approx
+        elif tw.detected_at:
+            parts.append(
+                f"🔁 转推时间：<t:{tw.detected_at}:f> · <t:{tw.detected_at}:R>  "
+                f"`±10分钟近似`"
+            )
+            if pub_ts:
+                parts.append(f"📅 原推发布：<t:{pub_ts}:f>")
+        elif pub_ts:
+            parts.append(f"🕐 时间：<t:{pub_ts}:f>")
+    elif pub_ts:
+        parts.append(f"🕐 发布时间：<t:{pub_ts}:f> · <t:{pub_ts}:R>")
 
     if summary:
         parts.append(f"**📋 内容摘要**\n{summary}")
@@ -476,19 +498,56 @@ def main() -> int:
         print("[error] TWITTER_USERNAMES is empty", flush=True)
         return 1
 
-    print(f"[start] monitoring {len(USERNAMES)} accounts: {USERNAMES}", flush=True)
+    use_x_api = bool(X_AUTH_TOKEN and X_CT0)
+    print(f"[start] monitoring {len(USERNAMES)} accounts: {USERNAMES} "
+          f"(source: {'X GraphQL' if use_x_api else 'nitter RSS'})", flush=True)
 
     all_tweets: list[Tweet] = []
     for user in USERNAMES:
-        try:
-            raw = fetch_rss(user)
-        except Exception as e:
-            print(f"[fetch] giving up on {user}: {e}", flush=True)
-            continue
-        items = ET.fromstring(raw).findall(".//item")
-        per_user = [parse_tweet(it, monitored_user=user) for it in items]
-        per_user = [t for t in per_user if t.guid]
-        print(f"[parse] @{user}: {len(per_user)} items", flush=True)
+        per_user: list[Tweet] = []
+
+        if use_x_api:
+            try:
+                from x_api import fetch_user_tweets, XAPIError
+                norms = fetch_user_tweets(user, X_CT0, X_AUTH_TOKEN, count=40)
+                for n in norms:
+                    per_user.append(Tweet(
+                        guid=n["guid"],
+                        title=n["title"],
+                        author=n["author"],
+                        pub_date=n["pub_date"],
+                        link=n["link"],
+                        description_html=n["description_html"],
+                        is_retweet=n["is_retweet"],
+                        is_reply=n["is_reply"],
+                        images=n["images"],
+                        videos=n["videos"],
+                        text=n["text"],
+                        monitored_user=user,
+                        original_pub_date=n.get("original_pub_date", ""),
+                    ))
+                print(f"[parse] @{user} via X API: {len(per_user)} items", flush=True)
+            except Exception as e:
+                print(f"[x_api] @{user} failed: {e}; falling back to nitter",
+                      flush=True)
+                use_x_api_for_this = False
+            else:
+                use_x_api_for_this = True
+        else:
+            use_x_api_for_this = False
+
+        if not use_x_api_for_this and not per_user:
+            try:
+                raw = fetch_rss(user)
+                items = ET.fromstring(raw).findall(".//item")
+                per_user = [parse_tweet(it, monitored_user=user) for it in items]
+                per_user = [t for t in per_user if t.guid]
+                print(f"[parse] @{user} via nitter: {len(per_user)} items",
+                      flush=True)
+            except Exception as e:
+                print(f"[fetch] giving up on {user}: {e}", flush=True)
+                continue
+
         all_tweets.extend(per_user)
         time.sleep(2)
 

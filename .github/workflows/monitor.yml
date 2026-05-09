@@ -34,6 +34,8 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
+          X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
+          X_CT0: ${{ secrets.X_CT0 }}
           BOOTSTRAP: ${{ inputs.bootstrap }}
         run: python monitor.py
 
