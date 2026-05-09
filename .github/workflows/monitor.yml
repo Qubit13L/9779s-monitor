@@ -2,7 +2,13 @@ name: Monitor Twitter
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # Active hours: Beijing 07:00 - 01:00 next day (UTC+8).
+    # In UTC that's 23:00 (prev day) - 17:00 (same day).
+    # Skipping UTC 17-22 = Beijing 01:00-06:59 to reduce queue pressure.
+    # */2 (vs */5) makes GitHub more likely to actually run during peak hours
+    # since they merge schedules during high load.
+    - cron: "*/2 0-16 * * *"
+    - cron: "*/2 23 * * *"
   workflow_dispatch:
     inputs:
       bootstrap:
