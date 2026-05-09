@@ -1,14 +1,19 @@
 name: Monitor Twitter
 
+# Two trigger paths working together:
+#
+# 1. Self-loop (primary): each run sleeps 100s and dispatches the next run
+#    via a PAT. This bypasses GitHub's schedule throttling completely —
+#    workflow_dispatch is not subject to the 5-min/heavy-load throttling.
+#    Result: ~2 min interval, regardless of GitHub's queue load.
+#
+# 2. Schedule (failsafe): low-frequency cron that revives the chain if it
+#    ever breaks (workflow fails, PAT expired, GH outage). Skips Beijing
+#    01:00-06:59 (= UTC 17:00-22:59). Only 4x/hour during active hours.
 on:
   schedule:
-    # Active hours: Beijing 07:00 - 01:00 next day (UTC+8).
-    # In UTC that's 23:00 (prev day) - 17:00 (same day).
-    # Skipping UTC 17-22 = Beijing 01:00-06:59 to reduce queue pressure.
-    # */2 (vs */5) makes GitHub more likely to actually run during peak hours
-    # since they merge schedules during high load.
-    - cron: "*/2 0-16 * * *"
-    - cron: "*/2 23 * * *"
+    - cron: "*/15 0-16 * * *"
+    - cron: "*/15 23 * * *"
   workflow_dispatch:
     inputs:
       bootstrap:
@@ -56,3 +61,30 @@ jobs:
           git add state/
           git commit -m "chore: update seen state [skip ci]"
           git push
+
+      - name: Schedule next run (self-loop)
+        # Skip self-dispatch during Beijing 01:00-06:59 (= UTC 17:00-22:59)
+        # so the chain naturally pauses overnight; the schedule cron will
+        # restart it at Beijing 07:00 (= UTC 23:00).
+        if: ${{ inputs.bootstrap != 'true' }}
+        env:
+          PAT: ${{ secrets.TRIGGER_PAT }}
+        run: |
+          UTC_HOUR=$(date -u +%H)
+          if [[ $UTC_HOUR -ge 17 && $UTC_HOUR -le 22 ]]; then
+            echo "Beijing nighttime (UTC $UTC_HOUR), pausing self-loop"
+            exit 0
+          fi
+          # Space runs ~110s apart so we don't hammer the queue
+          echo "Sleeping 110s before dispatching next run..."
+          sleep 110
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer $PAT" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/monitor.yml/dispatches" \
+            -d '{"ref":"main"}')
+          echo "next-run dispatch: HTTP $STATUS"
+          # 204 is success; if PAT expired/revoked we'll fail loud and
+          # the failsafe schedule cron will pick up next iteration.
+          [[ "$STATUS" == "204" ]] || exit 1
