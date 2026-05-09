@@ -79,10 +79,10 @@
         "url": "https://www.instagram.com/p/DXgVi7KkzkO/",
         "post_caption": "Monthly Schedule - May 2026"
       },
-      "reminded_24h": false,
+      "reminded_24h": true,
       "reminded_2h": false,
       "created_at": 1715234400,
-      "updated_at": 1715234400
+      "updated_at": 1778317210
     },
     {
       "id": "janeeeyeh_2026-05-13_shooting-confidential",
