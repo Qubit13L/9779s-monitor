@@ -383,6 +383,15 @@ def build_embeds(tw: Tweet, analysis: dict) -> list[dict]:
     source = analysis.get("source", "deepseek") if analysis else "none"
 
     parts: list[str] = []
+
+    # Discord <t:UNIX:f> renders as the viewer's local timezone, e.g. "May 10, 2026 11:45 PM"
+    # <t:UNIX:R> shows relative ("3 hours ago"). Show both so user always knows exact time.
+    try:
+        ts = int(parsedate_to_datetime(tw.pub_date).timestamp())
+        parts.append(f"🕐 发布时间：<t:{ts}:f> · <t:{ts}:R>")
+    except Exception:
+        pass
+
     if summary:
         parts.append(f"**📋 内容摘要**\n{summary}")
 
