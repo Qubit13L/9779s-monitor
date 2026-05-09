@@ -591,6 +591,14 @@ def main() -> int:
     except Exception as e:
         print(f"[itinerary] tick failed: {e}", flush=True)
 
+    # Bot poll: read user messages from #行程表, handle add/update/query/delete.
+    # No-ops cleanly when bot token/channel id aren't set yet.
+    try:
+        import bot
+        bot.poll()
+    except Exception as e:
+        print(f"[bot] poll failed: {e}", flush=True)
+
     return 0
 
 

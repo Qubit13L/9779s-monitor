@@ -44,6 +44,8 @@ jobs:
           TWITTER_USERNAMES: ${{ vars.TWITTER_USERNAMES }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_ITINERARY_WEBHOOK_URL: ${{ secrets.DISCORD_ITINERARY_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_ITINERARY_CHANNEL_ID: ${{ secrets.DISCORD_ITINERARY_CHANNEL_ID }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
