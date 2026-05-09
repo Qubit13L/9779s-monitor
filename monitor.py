@@ -70,6 +70,10 @@ class Tweet:
     # Which monitored username produced this tweet (could be janeeyeh or Kaosupassara9).
     # Distinct from `author`, which is the original poster for RTs.
     monitored_user: str = ""
+    # Unix timestamp of when *we* first saw this tweet in the feed.
+    # For retweets we use this (±10 min approximation) as the RT time,
+    # since nitter only exposes the original post's pubDate.
+    detected_at: int = 0
 
 
 def http_get(url: str, timeout: int = 20) -> bytes:
@@ -181,19 +185,30 @@ def parse_tweet(item: ET.Element, monitored_user: str = "") -> Tweet:
     )
 
 
-def load_state() -> set[str]:
+def load_state() -> dict[str, int]:
+    """State maps tweet GUID -> unix timestamp of when we first detected it.
+
+    Backwards-compatible: if state file is the old list-of-strings format,
+    convert each entry to detected_at=0 (unknown).
+    """
     if not STATE_FILE.exists():
-        return set()
+        return {}
     try:
-        return set(json.loads(STATE_FILE.read_text()))
+        raw = json.loads(STATE_FILE.read_text())
+        if isinstance(raw, list):
+            return {g: 0 for g in raw if g}
+        if isinstance(raw, dict):
+            return {str(k): int(v) for k, v in raw.items()}
+        return {}
     except Exception:
-        return set()
+        return {}
 
 
-def save_state(seen: set[str]) -> None:
+def save_state(seen: dict[str, int]) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    trimmed = list(seen)[-MAX_SEEN:]
-    STATE_FILE.write_text(json.dumps(trimmed, indent=2, ensure_ascii=False))
+    items = list(seen.items())[-MAX_SEEN:]
+    payload = {k: v for k, v in items}
+    STATE_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def is_likely_chinese(text: str) -> bool:
@@ -384,13 +399,23 @@ def build_embeds(tw: Tweet, analysis: dict) -> list[dict]:
 
     parts: list[str] = []
 
-    # Discord <t:UNIX:f> renders as the viewer's local timezone, e.g. "May 10, 2026 11:45 PM"
-    # <t:UNIX:R> shows relative ("3 hours ago"). Show both so user always knows exact time.
+    # Discord <t:UNIX:f> renders in viewer's local timezone, <t:UNIX:R> shows relative.
+    # For retweets we show TWO times: detected-at (≈ when she RT'd, ±10min) AND original pubDate.
+    # For everything else there's only one time so we keep it simple.
     try:
-        ts = int(parsedate_to_datetime(tw.pub_date).timestamp())
-        parts.append(f"🕐 发布时间：<t:{ts}:f> · <t:{ts}:R>")
+        orig_ts = int(parsedate_to_datetime(tw.pub_date).timestamp())
     except Exception:
-        pass
+        orig_ts = 0
+
+    if tw.is_retweet and tw.detected_at:
+        parts.append(
+            f"🔁 转推时间：<t:{tw.detected_at}:f> · <t:{tw.detected_at}:R>  "
+            f"`±10分钟近似`"
+        )
+        if orig_ts:
+            parts.append(f"📅 原推发布：<t:{orig_ts}:f>")
+    elif orig_ts:
+        parts.append(f"🕐 发布时间：<t:{orig_ts}:f> · <t:{orig_ts}:R>")
 
     if summary:
         parts.append(f"**📋 内容摘要**\n{summary}")
@@ -470,12 +495,15 @@ def main() -> int:
     all_tweets.sort(key=lambda t: t.pub_date)
 
     seen = load_state()
+    now = int(time.time())
     new_tweets = [t for t in all_tweets if t.guid not in seen]
+    for t in new_tweets:
+        t.detected_at = now
     print(f"[diff] {len(new_tweets)} new of {len(all_tweets)} total", flush=True)
 
     if bootstrap or not seen:
         for t in all_tweets:
-            seen.add(t.guid)
+            seen[t.guid] = now
         save_state(seen)
         print(f"[bootstrap] marked {len(all_tweets)} as seen, no push", flush=True)
         return 0
@@ -489,7 +517,7 @@ def main() -> int:
                 analysis = translate_with_google(t.text)
         ok = push_discord(t, analysis)
         if ok:
-            seen.add(t.guid)
+            seen[t.guid] = t.detected_at or now
             pushed += 1
             time.sleep(1)
 
