@@ -2,18 +2,19 @@ name: Monitor Twitter
 
 # Two trigger paths working together:
 #
-# 1. Self-loop (primary): each run sleeps 100s and dispatches the next run
-#    via a PAT. This bypasses GitHub's schedule throttling completely —
-#    workflow_dispatch is not subject to the 5-min/heavy-load throttling.
-#    Result: ~2 min interval, regardless of GitHub's queue load.
+# 1. Self-loop (primary, 24/7): each run dispatches the next via PAT.
+#    Day cadence ~2 min, night cadence ~30 min. Critically: NEVER STOPS
+#    so we don't depend on GitHub's unreliable schedule cron to restart.
 #
-# 2. Schedule (failsafe): low-frequency cron that revives the chain if it
-#    ever breaks (workflow fails, PAT expired, GH outage). Skips Beijing
-#    01:00-06:59 (= UTC 17:00-22:59). Only 4x/hour during active hours.
+# 2. Schedule (failsafe): low-frequency cron that may revive the chain
+#    if it dies entirely (PAT expired, GH outage, etc.). Don't rely on it
+#    — we learned the hard way it can be silent for 17+ hours.
 on:
   schedule:
-    - cron: "*/15 0-16 * * *"
-    - cron: "*/15 23 * * *"
+    # 24/7 failsafe (only relied on when self-loop is fully dead).
+    # Hourly during active hours, every 2 hours overnight.
+    - cron: "5 0-16,23 * * *"
+    - cron: "0 17-22/2 * * *"
   workflow_dispatch:
     inputs:
       bootstrap:
@@ -73,21 +74,25 @@ jobs:
           fi
 
       - name: Schedule next run (self-loop)
-        # Skip self-dispatch during Beijing 01:00-06:59 (= UTC 17:00-22:59)
-        # so the chain naturally pauses overnight; the schedule cron will
-        # restart it at Beijing 07:00 (= UTC 23:00).
+        # Self-loop runs 24/7 so the chain never depends on GitHub's
+        # unreliable schedule cron to wake us back up. Two cadences:
+        #   • Day  (Beijing 07:00-00:59 = UTC 23-16): sleep 110s → ~2 min
+        #   • Night (Beijing 01:00-06:59 = UTC 17-22): sleep 1700s → ~30 min
+        # The chain stays alive even at night; she just gets slower
+        # response while sleeping (still good enough for celebrity activity).
         if: ${{ inputs.bootstrap != 'true' }}
         env:
           PAT: ${{ secrets.TRIGGER_PAT }}
         run: |
           UTC_HOUR=$(date -u +%H)
           if [[ $UTC_HOUR -ge 17 && $UTC_HOUR -le 22 ]]; then
-            echo "Beijing nighttime (UTC $UTC_HOUR), pausing self-loop"
-            exit 0
+            SLEEP_SEC=1700
+            echo "Beijing nighttime (UTC $UTC_HOUR), sleeping ${SLEEP_SEC}s before next dispatch"
+          else
+            SLEEP_SEC=110
+            echo "Beijing active hours (UTC $UTC_HOUR), sleeping ${SLEEP_SEC}s before next dispatch"
           fi
-          # Space runs ~110s apart so we don't hammer the queue
-          echo "Sleeping 110s before dispatching next run..."
-          sleep 110
+          sleep $SLEEP_SEC
           STATUS=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
             -H "Authorization: Bearer $PAT" \
             -H "Accept: application/vnd.github+json" \
@@ -96,5 +101,5 @@ jobs:
             -d '{"ref":"main"}')
           echo "next-run dispatch: HTTP $STATUS"
           # 204 is success; if PAT expired/revoked we'll fail loud and
-          # the failsafe schedule cron will pick up next iteration.
+          # the failsafe schedule cron will (maybe) pick up next iteration.
           [[ "$STATUS" == "204" ]] || exit 1
