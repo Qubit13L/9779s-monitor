@@ -81,6 +81,11 @@ class Tweet:
     # When sourced from nitter: pub_date is the original post time and
     # original_pub_date is empty.
     original_pub_date: str = ""
+    # ID of the underlying retweeted tweet (only set for RTs from x_api).
+    # x_api's `guid` is the RT *activity* ID; this is the *original tweet* ID
+    # which is what nitter would also use as its GUID. Tracking both lets us
+    # dedup across the x_api→nitter fallback.
+    retweeted_guid: str = ""
 
 
 def http_get(url: str, timeout: int = 20) -> bytes:
@@ -525,6 +530,7 @@ def main() -> int:
                         text=n["text"],
                         monitored_user=user,
                         original_pub_date=n.get("original_pub_date", ""),
+                        retweeted_guid=n.get("retweeted_guid", ""),
                     ))
                 print(f"[parse] @{user} via X API: {len(per_user)} items", flush=True)
             except Exception as e:
@@ -555,7 +561,19 @@ def main() -> int:
 
     seen = load_state()
     now = int(time.time())
-    new_tweets = [t for t in all_tweets if t.guid not in seen]
+
+    def _is_seen(t: Tweet) -> bool:
+        # Match if EITHER the wrapper GUID (x_api's RT activity ID) OR the
+        # underlying original tweet ID (nitter's GUID) is in state. This
+        # prevents duplicate pushes when x_api falls back to nitter, since
+        # the two sources use different GUIDs for the same retweet.
+        if t.guid in seen:
+            return True
+        if t.retweeted_guid and t.retweeted_guid in seen:
+            return True
+        return False
+
+    new_tweets = [t for t in all_tweets if not _is_seen(t)]
     for t in new_tweets:
         t.detected_at = now
     print(f"[diff] {len(new_tweets)} new of {len(all_tweets)} total", flush=True)
@@ -563,6 +581,8 @@ def main() -> int:
     if bootstrap or not seen:
         for t in all_tweets:
             seen[t.guid] = now
+            if t.retweeted_guid:
+                seen[t.retweeted_guid] = now
         save_state(seen)
         print(f"[bootstrap] marked {len(all_tweets)} as seen, no push", flush=True)
         return 0
@@ -576,7 +596,12 @@ def main() -> int:
                 analysis = translate_with_google(t.text)
         ok = push_discord(t, analysis)
         if ok:
-            seen[t.guid] = t.detected_at or now
+            ts = t.detected_at or now
+            seen[t.guid] = ts
+            # Also store the underlying original tweet ID so a subsequent
+            # nitter fallback (which uses the original ID as GUID) dedups.
+            if t.retweeted_guid:
+                seen[t.retweeted_guid] = ts
             pushed += 1
             time.sleep(1)
 

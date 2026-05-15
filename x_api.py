@@ -227,6 +227,13 @@ def _to_normalized(tw_result: dict, monitored_user: str) -> dict | None:
     tweet_id = legacy.get("id_str", "")
     link = f"https://x.com/{display_author}/status/{tweet_id}" if tweet_id else ""
 
+    # For RTs, also expose the underlying tweet's ID. This is what nitter
+    # uses as its GUID for the same RT — tracking both lets us dedup across
+    # the x_api → nitter fallback.
+    retweeted_guid = ""
+    if is_retweet:
+        retweeted_guid = _result_legacy(rt).get("id_str", "")
+
     return {
         "guid": tweet_id,
         "title": title[:280],
@@ -241,6 +248,7 @@ def _to_normalized(tw_result: dict, monitored_user: str) -> dict | None:
         "text": full_text,
         "monitored_user": monitored_user,
         "original_pub_date": original_pub_date,
+        "retweeted_guid": retweeted_guid,
     }
 
 
