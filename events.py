@@ -93,6 +93,24 @@ def event_start_utc(ev: dict) -> datetime | None:
     return naive.replace(tzinfo=BKK).astimezone(timezone.utc)
 
 
+def event_date_midnight_utc(ev: dict) -> datetime:
+    """Returns the UTC instant of midnight at the event's start date (BKK)."""
+    naive = datetime.strptime(ev["start_date_bkk"], "%Y-%m-%d")
+    return naive.replace(tzinfo=BKK).astimezone(timezone.utc)
+
+
+def day_before_noon_utc(ev: dict) -> datetime:
+    """When the 'tomorrow you have X' reminder for a date-only event should fire.
+
+    Returns: previous day 12:00 BKK (= 13:00 Beijing) in UTC. Stable, predictable,
+    not late at night. The tick uses this as a 'fire at or after' threshold.
+    """
+    midnight = datetime.strptime(ev["start_date_bkk"], "%Y-%m-%d")
+    day_before = midnight - timedelta(days=1)
+    naive = day_before.replace(hour=12, minute=0)
+    return naive.replace(tzinfo=BKK).astimezone(timezone.utc)
+
+
 def date_range_label(ev: dict) -> str:
     s = ev["start_date_bkk"]
     e = ev.get("end_date_bkk") or s
@@ -209,19 +227,30 @@ def build_weekly_embed(username: str, week_start_bkk: str, events: list[dict]) -
 
 
 def build_reminder_embed(ev: dict, kind: str) -> dict:
+    """kind is one of:
+      24h        — T-24h reminder, event has a known time
+      2h         — T-2h reminder, event has a known time
+      tomorrow   — date-only public event, fires day-before 12:00 BKK
+    """
     username = ev["username"]
     name = _name(username)
     color = _color(username)
-    start_utc = event_start_utc(ev)  # guaranteed non-None — gated upstream
 
     emoji = _emoji(ev)
     title = ev["title"]
     zh = ev.get("title_zh", "")
 
-    when_label = "明天" if kind == "24h" else "2 小时后"
+    when_label = {"24h": "明天", "2h": "2 小时后", "tomorrow": "明天"}.get(kind, "")
 
-    ts = int(start_utc.timestamp())
-    parts = [f"🕐 开始时间：<t:{ts}:f> · <t:{ts}:R>"]
+    parts: list[str] = []
+    if kind in ("24h", "2h"):
+        start_utc = event_start_utc(ev)
+        ts = int(start_utc.timestamp())
+        parts.append(f"🕐 开始时间：<t:{ts}:f> · <t:{ts}:R>")
+    else:
+        # date-only: show the date label, no fabricated time
+        parts.append(f"📅 日期（曼谷）：{date_range_label(ev)}")
+
     if zh and zh != title:
         parts.append(f"📌 活动：**{title}**\n{zh}")
     else:
@@ -229,11 +258,17 @@ def build_reminder_embed(ev: dict, kind: str) -> dict:
     if ev.get("notes"):
         parts.append(f"📝 备注：{ev['notes']}")
 
+    footer = {
+        "24h": "提醒类型：T-24h",
+        "2h": "提醒类型：T-2h",
+        "tomorrow": "提醒类型：前一天预告（暂无具体时间）",
+    }.get(kind, "")
+
     return {
         "title": f"⏰ {emoji} {name} · {when_label}",
         "description": "\n\n".join(parts),
         "color": color,
-        "footer": {"text": f"提醒类型：T-{kind}"},
+        "footer": {"text": footer},
     }
 
 
@@ -303,31 +338,47 @@ def tick(now_unix: int | None = None) -> None:
 
     # ---- per-event reminders ----
     for ev in events:
+        if ev.get("cancelled"):
+            continue
         try:
             start_utc = event_start_utc(ev)
         except Exception as e:
             print(f"[itinerary] bad event {ev.get('id')}: {e}", flush=True)
             continue
 
-        if start_utc is None:
-            continue  # date-only event, no T-24h/T-2h reminders
+        if start_utc is not None:
+            # Has confirmed time → T-24h and T-2h precise reminders
+            if now >= start_utc:
+                continue
 
-        if now >= start_utc:
-            continue  # event already started
+            if not ev.get("reminded_24h") and now >= (start_utc - timedelta(hours=24)):
+                if push_reminder(ev, "24h"):
+                    ev["reminded_24h"] = True
+                    ev["updated_at"] = int(now.timestamp())
+                    changed = True
+                    time.sleep(1)
 
-        if not ev.get("reminded_24h") and now >= (start_utc - timedelta(hours=24)):
-            if push_reminder(ev, "24h"):
-                ev["reminded_24h"] = True
-                ev["updated_at"] = int(now.timestamp())
-                changed = True
-                time.sleep(1)
-
-        if not ev.get("reminded_2h") and now >= (start_utc - timedelta(hours=2)):
-            if push_reminder(ev, "2h"):
-                ev["reminded_2h"] = True
-                ev["updated_at"] = int(now.timestamp())
-                changed = True
-                time.sleep(1)
+            if not ev.get("reminded_2h") and now >= (start_utc - timedelta(hours=2)):
+                if push_reminder(ev, "2h"):
+                    ev["reminded_2h"] = True
+                    ev["updated_at"] = int(now.timestamp())
+                    changed = True
+                    time.sleep(1)
+        else:
+            # Date-only. Only public events get a day-before predictive reminder;
+            # confidential shoots stay out of the per-event flow (they still show
+            # up in monthly/weekly digests).
+            if ev.get("type") != "public":
+                continue
+            event_midnight = event_date_midnight_utc(ev)
+            if now >= event_midnight:
+                continue  # day of event or later, no preview
+            if not ev.get("reminded_tomorrow") and now >= day_before_noon_utc(ev):
+                if push_reminder(ev, "tomorrow"):
+                    ev["reminded_tomorrow"] = True
+                    ev["updated_at"] = int(now.timestamp())
+                    changed = True
+                    time.sleep(1)
 
     # ---- weekly digest: every Mon 12:00 Beijing onwards, once per ISO week ----
     now_bjt = now.astimezone(PEK)
