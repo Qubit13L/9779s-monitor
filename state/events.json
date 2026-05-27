@@ -187,7 +187,8 @@
       "reminded_24h": false,
       "reminded_2h": false,
       "created_at": 1715234400,
-      "updated_at": 1715234400
+      "updated_at": 1779858060,
+      "reminded_tomorrow": true
     }
   ],
   "weekly_pushed": {
